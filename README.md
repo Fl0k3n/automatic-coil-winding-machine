@@ -1,0 +1,2 @@
+# Automatic coil winding machine
+
