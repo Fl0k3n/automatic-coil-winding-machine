@@ -3,6 +3,7 @@
 #include "lcd_driver.h"
 #include "pico/stdlib.h"
 #include "rotary_encoder_driver.h"
+#include "state.h"
 
 /*
 
@@ -42,5 +43,9 @@ void menu_show_jog_finished_and_wait_for_confirm(void);
 void menu_jog_paused(void);
 void menu_show_winding_finished_screen(void);
 void menu_show_winding_paused_screen(void);
+void menu_show_winding_error_screen(enum WindingErrorCode error_code);
 void menu_show_winding_progress(int guide_position_microns,
-                                uint num_current_turns, uint num_total_turns);
+                                uint num_current_turns, uint num_total_turns,
+                                int speed_steps_delta);
+void menu_show_inductance_measurement_finished_screen(
+    struct InductanceMeasurementResults results);

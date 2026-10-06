@@ -16,8 +16,9 @@ struct RotaryEncoder {
 void rotary_encoder_init(struct RotaryEncoder* re, uint s1_pin, uint s2_pin,
                          uint key_pin);
 
-void rotary_encoder_handle_gpio_irq(struct RotaryEncoder* re, uint gpio,
-                                    uint32_t events);
+// returns incremental delta from handling of this irq (-1, 0 or 1)
+int rotary_encoder_handle_gpio_irq(struct RotaryEncoder* re, uint gpio,
+                                   uint32_t events);
 
 static inline void rotary_encoder_reset(struct RotaryEncoder* re) {
     re->delta = 0;

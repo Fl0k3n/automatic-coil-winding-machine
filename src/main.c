@@ -1,6 +1,8 @@
 #include <stdio.h>
 
 #include "controller.h"
+#include "freq_meter.pio.h"
+#include "hardware/pio.h"
 #include "hardware/uart.h"
 #include "io.h"
 #include "lcd_driver.h"
@@ -34,17 +36,41 @@
 #define COIL_MOTOR_ENABLE_PIN 28
 
 #define MOTOR_DRIVER_UART uart0
+#define SCREW_MOTOR_UART_ADDR 0
+#define COIL_MOTOR_UART_ADDR 1
 #define MOTOR_DRIVER_UART_BAUD_RATE 115200
 #define COIL_MOTOR_UART_TX_PIN 16
 #define COIL_MOTOR_UART_RX_PIN 17
 
 #define HOMING_BUTTON_PIN 15
 
+#define L_METER_POWER_POWER_SWITCH_PIN 8
+#define L_METER_COMPARATOR_OUTPUT_PIN 9
+#define L_METER_POWER_ON_VALUE (true)
+
 #define RPM_TO_TIME_BETWEEN_STEPS_US(rpm, steps_per_rev) \
     ((60 * 1000000) / ((rpm) * (steps_per_rev)))
 
 static struct LCD lcd;
 static struct RotaryEncoder rotary_encoder;
+
+static inline void configure_motor_drivers(void) {
+    gpio_put(COIL_MOTOR_ENABLE_PIN, false);
+    gpio_put(SCREW_MOTOR_ENABLE_PIN, false);
+    sleep_ms(50);
+    tmc2209_uart_init(MOTOR_DRIVER_UART, COIL_MOTOR_UART_TX_PIN,
+                      COIL_MOTOR_UART_RX_PIN, MOTOR_DRIVER_UART_BAUD_RATE);
+    sleep_ms(10);
+    tmc2209_set_fullstep(MOTOR_DRIVER_UART, COIL_MOTOR_UART_ADDR);
+    sleep_ms(10);
+    tmc2209_set_fullstep(MOTOR_DRIVER_UART, SCREW_MOTOR_UART_ADDR);
+    sleep_ms(10);
+}
+
+bool blocking_read_coil_motor_load(uint16_t* result) {
+    return tmc2209_get_stall_guard_result(MOTOR_DRIVER_UART,
+                                          COIL_MOTOR_UART_ADDR, result);
+}
 
 static struct ControllerConfig controller_config = {
     .coil_motor_enable_pin = COIL_MOTOR_ENABLE_PIN,
@@ -59,9 +85,9 @@ static struct ControllerConfig controller_config = {
     .screw_motor_step_pin = SCREW_MOTOR_STEP_PIN,
     .screw_motor_dir_pin = SCREW_MOTOR_DIR_PIN,
     .min_time_between_coil_motor_steps_us =
-        RPM_TO_TIME_BETWEEN_STEPS_US(300, 200),
+        RPM_TO_TIME_BETWEEN_STEPS_US(150, 200),
     .min_time_between_screw_motor_steps_us =
-        RPM_TO_TIME_BETWEEN_STEPS_US(300, 200),
+        RPM_TO_TIME_BETWEEN_STEPS_US(150, 200),
     .screw_pitch_microns = 2000,
     .active_indicator_led_pin = LED1_PIN,
     .paused_or_error_led_pin = LED2_PIN,
@@ -72,22 +98,19 @@ static struct ControllerConfig controller_config = {
     .full_rotation_num_steps_coil_motor = 200,
     .full_rotation_num_steps_screw_motor = 200,
     .homing_button_press_range_microns = 3000,
-};
-
-static inline void configure_motor_drivers() {
-    gpio_put(COIL_MOTOR_ENABLE_PIN, false);
-    gpio_put(SCREW_MOTOR_ENABLE_PIN, false);
-    sleep_ms(50);
-    tmc2209_uart_init(MOTOR_DRIVER_UART, COIL_MOTOR_UART_TX_PIN,
-                      COIL_MOTOR_UART_RX_PIN, MOTOR_DRIVER_UART_BAUD_RATE);
-    sleep_ms(10);
-    tmc2209_set_fullstep(MOTOR_DRIVER_UART, 1);  // coil motor
-    tmc2209_set_fullstep(MOTOR_DRIVER_UART, 0);  // screw motor
-    sleep_ms(10);
-}
+    .blocking_read_coil_motor_load = blocking_read_coil_motor_load,
+    .L_meter_comparator_output_pin = L_METER_COMPARATOR_OUTPUT_PIN,
+    .L_meter_power_switch_pin = L_METER_POWER_POWER_SWITCH_PIN,
+    .L_meter_power_on_value = L_METER_POWER_ON_VALUE,
+    .L_meter_LC_tank_capacitance = 99e-9,
+    .L_meter_LC_tank_parasitic_series_inductance = 1e-9};
 
 static void gpio_isr(uint gpio, uint32_t events) {
-    rotary_encoder_handle_gpio_irq(&rotary_encoder, gpio, events);
+    int incremental_delta =
+        rotary_encoder_handle_gpio_irq(&rotary_encoder, gpio, events);
+    if (incremental_delta != 0) {
+        controller_handle_rotary_encoder_delta_changed_irq(incremental_delta);
+    }
     if (gpio == ENCODER_KEY_PIN && (events & GPIO_IRQ_EDGE_FALL)) {
         controller_handle_rotary_encoder_button_pressed_irq();
     }
@@ -100,7 +123,7 @@ static void gpio_isr(uint gpio, uint32_t events) {
     }
 }
 
-int main() {
+int main(void) {
     stdio_init_all();
 
     sleep_ms(500);
@@ -156,6 +179,19 @@ int main() {
     gpio_init(HOMING_BUTTON_PIN);
     gpio_set_dir(HOMING_BUTTON_PIN, false);
     gpio_pull_up(HOMING_BUTTON_PIN);
+
+    gpio_init(L_METER_POWER_POWER_SWITCH_PIN);
+    gpio_put(L_METER_POWER_POWER_SWITCH_PIN, !L_METER_POWER_ON_VALUE);
+    gpio_set_dir(L_METER_POWER_POWER_SWITCH_PIN, true);
+
+    gpio_init(L_METER_COMPARATOR_OUTPUT_PIN);
+    gpio_set_dir(L_METER_COMPARATOR_OUTPUT_PIN, false);
+
+    bool pio_init_ok = pio_claim_free_sm_and_add_program(
+        &freq_meter_program, &controller_config.L_meter_pio,
+        &controller_config.L_meter_pio_sm,
+        &controller_config.L_meter_pio_program_offset);
+    hard_assert(pio_init_ok);
 
     lcd_i2c_init_with_i2c_uninitialized(
         &lcd, LCD_I2C, LCD_I2C_SCL_PIN, LCD_I2C_SDA_PIN,

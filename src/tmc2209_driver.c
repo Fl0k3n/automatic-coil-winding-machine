@@ -7,6 +7,8 @@
 #include "hardware/uart.h"
 #include "pico/stdlib.h"
 
+#define TMC2209_REG_SG_RESULT 0x41
+
 // TMC2209 UART CRC.
 // Same algorithm used by the janelia-arduino/TMC2209 library.
 static uint8_t tmc2209_crc(const uint8_t* data, size_t len) {
@@ -38,10 +40,10 @@ static void tmc2209_write(uart_inst_t* uart, uint8_t slave_addr, uint8_t reg,
     frame[2] = reg | 0x80;  // bit 7 = write
 
     // TMC2209 sends register data MSB first
-    frame[3] = (value >> 24) & 0xff;
-    frame[4] = (value >> 16) & 0xff;
-    frame[5] = (value >> 8) & 0xff;
-    frame[6] = (value >> 0) & 0xff;
+    frame[3] = (uint8_t)(value >> 24);
+    frame[4] = (uint8_t)(value >> 16);
+    frame[5] = (uint8_t)(value >> 8);
+    frame[6] = (uint8_t)(value >> 0);
 
     frame[7] = tmc2209_crc(frame, 7);
 
@@ -49,8 +51,8 @@ static void tmc2209_write(uart_inst_t* uart, uint8_t slave_addr, uint8_t reg,
     uart_tx_wait_blocking(uart);
 }
 
-static bool tmc2209_read(uart_inst_t* uart, uint8_t slave_addr, uint8_t reg,
-                         uint32_t* value) {
+bool tmc2209_read(uart_inst_t* uart, uint8_t slave_addr, uint8_t reg,
+                  uint32_t* value) {
     uint8_t request[4];
 
     request[0] = 0x05;
@@ -74,7 +76,7 @@ static bool tmc2209_read(uart_inst_t* uart, uint8_t slave_addr, uint8_t reg,
 
         while (!uart_is_readable(uart)) {
             if (time_us_64() - start > 5000) {
-                printf("FAILED EARLY\n");
+                // printf("FAILED EARLY\n");
                 return false;
             }
         }
@@ -90,7 +92,7 @@ static bool tmc2209_read(uart_inst_t* uart, uint8_t slave_addr, uint8_t reg,
 
         while (!uart_is_readable(uart)) {
             if (time_us_64() - start > 5000) {
-                printf("FAILED LATE\n");
+                // printf("FAILED LATE\n");
                 return false;
             }
         }
@@ -113,11 +115,11 @@ static bool tmc2209_read(uart_inst_t* uart, uint8_t slave_addr, uint8_t reg,
     if (tmc2209_crc(reply, 7) != reply[7]) ok = false;
 
     if (!ok) {
-        printf("read failed\n");
-        for (size_t i = 0; i < 8; i++) {
-            printf("%X", reply[i]);
-        }
-        printf("\n");
+        // printf("read failed\n");
+        // for (size_t i = 0; i < 8; i++) {
+        //     printf("%X", reply[i]);
+        // }
+        // printf("\n");
         return false;
     }
 
@@ -127,33 +129,33 @@ static bool tmc2209_read(uart_inst_t* uart, uint8_t slave_addr, uint8_t reg,
     return true;
 }
 
-static void txn_test(uart_inst_t* uart) {
-    uint8_t TMC2209_ADDR = 1;  // MS1 = 1, MS2 = 0
-    uint32_t before, after;
+// static void txn_test(uart_inst_t* uart) {
+//     uint8_t TMC2209_ADDR = 1;  // MS1 = 1, MS2 = 0
+//     uint32_t before, after;
 
-    if (!tmc2209_read(uart, TMC2209_ADDR, 0x02, &before)) {
-        printf("Cannot read TMC2209\n");
-        return;
-    }
+//     if (!tmc2209_read(uart, TMC2209_ADDR, 0x02, &before)) {
+//         printf("Cannot read TMC2209\n");
+//         return;
+//     }
 
-    // Perform one write
-    tmc2209_write(uart, TMC2209_ADDR, 0x00, 0x000001C1);
+//     // Perform one write
+//     tmc2209_write(uart, TMC2209_ADDR, 0x00, 0x000001C1);
 
-    if (!tmc2209_read(uart, TMC2209_ADDR, 0x02, &after)) {
-        printf("Cannot read TMC2209 after write\n");
-        return;
-    }
+//     if (!tmc2209_read(uart, TMC2209_ADDR, 0x02, &after)) {
+//         printf("Cannot read TMC2209 after write\n");
+//         return;
+//     }
 
-    printf("IFCNT before: %u\n", (unsigned)(before & 0xff));
-    printf("IFCNT after:  %u\n", (unsigned)(after & 0xff));
+//     printf("IFCNT before: %u\n", (unsigned)(before & 0xff));
+//     printf("IFCNT after:  %u\n", (unsigned)(after & 0xff));
 
-    uint32_t gconf;
+//     uint32_t gconf;
 
-    if (tmc2209_read(uart, TMC2209_ADDR, 0x00, &gconf))
-        printf("GCONF = 0x%08lx\n", gconf);
+//     if (tmc2209_read(uart, TMC2209_ADDR, 0x00, &gconf))
+//         printf("GCONF = 0x%08lx\n", gconf);
 
-    printf("done");
-}
+//     printf("done");
+// }
 
 void tmc2209_uart_init(uart_inst_t* uart, uint tx_pin, uint rx_pin, uint baud) {
     gpio_set_function(tx_pin, UART_FUNCSEL_NUM(uart, tx_pin));
@@ -199,4 +201,14 @@ void tmc2209_set_fullstep(uart_inst_t* uart, uint8_t addr) {
      *   = 0x18000053
      */
     tmc2209_write(uart, addr, 0x6C, 0x18000053);
+}
+
+bool tmc2209_get_stall_guard_result(uart_inst_t* uart, uint8_t addr,
+                                    uint16_t* result) {
+    uint32_t v = 0;
+    if (!tmc2209_read(uart, addr, TMC2209_REG_SG_RESULT, &v)) {
+        return false;
+    }
+    *result = (uint16_t)(v & 0x3ff);
+    return true;
 }

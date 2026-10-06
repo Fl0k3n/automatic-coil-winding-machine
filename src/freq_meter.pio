@@ -1,0 +1,92 @@
+.program freq_meter
+
+; 2^32 - 2 value, since we can only decrement the count = 2^32 - 1 - pushed_value
+; then frequency will be roughly 1 / ((small_const + count * 3) * 1/(clock_freq)) = clock_freq / (small_const + count * 3)
+; the actual small const is 0 for first cycle 2 for the next cycles
+pull
+; make sure we don't start mid high cycle
+wait 0 pin 0
+
+.wrap_target
+measure_loop:
+    ; wait for high transition
+    wait 1 pin 0
+
+    ; counts cycles
+    mov y, osr
+
+wait_low_loop:
+    ; will always jump
+    jmp y--, decrement_done1 
+decrement_done1:
+    jmp pin, wait_low_loop [1]
+wait_high_loop:
+    jmp y--, decrement_done2
+decrement_done2:
+    jmp pin, wait_done
+    jmp wait_high_loop
+
+wait_done:
+    in y, 32 ; auto pushes
+.wrap
+
+
+% c-sdk {
+
+#include "pico/stdlib.h"
+
+#include "pico/stdlib.h"
+#include "hardware/clocks.h"
+static inline void freq_meter_program_init(PIO pio, uint sm, uint offset,
+                                           uint pin) {
+    pio_sm_set_pindirs_with_mask(pio, sm, 0, 1u << pin);
+    pio_gpio_init(pio, pin);
+    pio_sm_config c = freq_meter_program_get_default_config(offset);
+    // auto push, direction doesn't matter
+    sm_config_set_in_shift(&c, false, true, 32);
+    sm_config_set_out_shift(&c, false, false, 32);
+    sm_config_set_in_pins(&c, pin);
+    sm_config_set_jmp_pin(&c, pin);
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+    pio->txf[sm] = 0xFFFFFFFE;
+}
+static inline void freq_meter_program_reset(PIO pio, uint sm, uint offset,
+                                            uint pin) {
+    pio_sm_set_enabled(pio, sm, false);
+    freq_meter_program_init(pio, sm, offset, pin);
+}
+static inline uint32_t freq_meter_read_fifo_and_get_cycle_count(PIO pio,
+                                                                uint sm,
+                                                                bool first_cycle) {
+    uint32_t count = pio->rxf[sm];
+    return (0xFFFFFFFE - count) * 3 + (first_cycle ? 0 : 2);
+}
+static inline uint32_t freq_meter_program_get_cycle_count(PIO pio, uint sm, bool first_cycle) {
+    while (pio_sm_is_rx_fifo_empty(pio, sm)) {
+        tight_loop_contents();
+    }
+    return freq_meter_read_fifo_and_get_cycle_count(pio, sm, first_cycle);
+}
+static inline bool freq_meter_get_cycle_count_timeout(PIO pio, uint sm,
+                                                      uint timeout_us,
+                                                      uint32_t* res,
+                                                      bool first_cycle) {
+    uint64_t start_us = to_us_since_boot(get_absolute_time());
+    while (pio_sm_is_rx_fifo_empty(pio, sm) &&
+           to_us_since_boot(get_absolute_time()) - start_us < timeout_us) {
+        tight_loop_contents();
+    }
+    if (pio_sm_is_rx_fifo_empty(pio, sm)) {
+        return false;
+    }
+    *res = freq_meter_read_fifo_and_get_cycle_count(pio, sm, first_cycle);
+    return true;
+}
+
+static inline uint32_t freq_meter_program_cycle_count_to_freq_hz(uint32_t cycles) {
+    uint32_t sys_freq = clock_get_hz(clk_sys);
+    return sys_freq / cycles;
+}
+
+%}

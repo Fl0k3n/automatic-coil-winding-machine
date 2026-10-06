@@ -35,8 +35,8 @@ void rotary_encoder_init(struct RotaryEncoder* re, uint s1_pin, uint s2_pin,
 static const int8_t quad_table[16] = {0,  -1, 1, 0, 1, 0, 0,  -1,
                                       -1, 0,  0, 1, 0, 1, -1, 0};
 
-void rotary_encoder_handle_gpio_irq(struct RotaryEncoder* re, uint gpio,
-                                    uint32_t events) {
+int rotary_encoder_handle_gpio_irq(struct RotaryEncoder* re, uint gpio,
+                                   uint32_t events) {
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
 
     if (gpio == re->key_pin) {
@@ -47,11 +47,11 @@ void rotary_encoder_handle_gpio_irq(struct RotaryEncoder* re, uint gpio,
                 re->key_press_timestamp_ms = now_ms;
             }
         }
-        return;
+        return 0;
     }
 
     if (gpio != re->s1_pin && gpio != re->s2_pin) {
-        return;
+        return 0;
     }
 
     uint8_t s1 = gpio_get(re->s1_pin);
@@ -61,14 +61,17 @@ void rotary_encoder_handle_gpio_irq(struct RotaryEncoder* re, uint gpio,
     uint8_t transition = (re->last_state << 2) | state;
 
     re->transition_accum += quad_table[transition];
+    int incremental_delta = 0;
     if (re->transition_accum >= 4) {
-        re->delta++;
+        incremental_delta = 1;
         re->transition_accum -= 4;
     } else if (re->transition_accum <= -4) {
-        re->delta--;
+        incremental_delta = -1;
         re->transition_accum += 4;
     }
     re->last_state = state;
+    re->delta += incremental_delta;
+    return incremental_delta;
 }
 
 int rotary_encoder_get_and_reset_delta(struct RotaryEncoder* re) {
