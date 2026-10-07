@@ -1,4 +1,4 @@
-# Automatic Coil Winding Machine with Inductance Meter
+# Automatic Coil Winding Machine and Inductance Meter
 
 <div align="center">
   <img src="./imgs/demo.gif" alt="X" />
